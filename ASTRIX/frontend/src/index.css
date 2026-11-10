@@ -30,3 +30,26 @@
 ::-webkit-scrollbar-thumb:hover {
   background: rgba(100, 116, 139, 1);
 }
+
+/* ── Round 2: map markers & routes ─────────────────────────────────────── */
+.leaflet-container { background: #0b1220; font-family: inherit; }
+.astrix-pin { position: relative; width: 26px; height: 26px; }
+.astrix-pin .core {
+  position: absolute; inset: 5px; border-radius: 9999px; border: 2px solid #fff;
+  box-shadow: 0 0 10px var(--c);
+  background: var(--c);
+}
+.astrix-pin .ring {
+  position: absolute; inset: 0; border-radius: 9999px; background: var(--c);
+  opacity: .55; animation: pinpulse 1.8s ease-out infinite;
+}
+.astrix-pin.sel .core { transform: scale(1.35); }
+@keyframes pinpulse { 0% { transform: scale(.5); opacity: .7; } 100% { transform: scale(2.1); opacity: 0; } }
+.astrix-team {
+  width: 30px; height: 30px; border-radius: 9px; display: grid; place-items: center; font-size: 17px;
+  background: #0f172a; border: 2px solid var(--c); box-shadow: 0 0 8px var(--c);
+}
+.astrix-team.off { filter: grayscale(1); opacity: .7; }
+.route-flow { animation: routeflow 1s linear infinite; filter: drop-shadow(0 0 4px #38bdf8); }
+@keyframes routeflow { to { stroke-dashoffset: -24; } }
+.leaflet-popup-content-wrapper, .leaflet-tooltip { border-radius: 10px; }

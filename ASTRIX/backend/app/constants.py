@@ -1,5 +1,6 @@
 from enum import Enum
 
+
 class Category(str, Enum):
     FIRE = "Fire Emergency"
     ROAD = "Road Accident"
@@ -8,21 +9,36 @@ class Category(str, Enum):
     COLLAPSE = "Building Collapse"
     OTHER = "Other Emergencies"
 
+
 class Severity(str, Enum):
-    LOW = "Low"
-    MEDIUM = "Medium"
-    HIGH = "High"
     CRITICAL = "Critical"
+    HIGH = "High"
+    MEDIUM = "Medium"
+    LOW = "Low"
+
 
 class Status(str, Enum):
     REPORTED = "Reported"
-    PENDING = "Pending"
+    ASSIGNED = "Assigned"
     IN_PROGRESS = "In Progress"
     RESOLVED = "Resolved"
 
+
+class TeamStatus(str, Enum):
+    AVAILABLE = "Available"
+    BUSY = "Busy"
+    OFFLINE = "Offline"
+
+
+# Strict, forward-only lifecycle: Reported -> Assigned -> In Progress -> Resolved
 ALLOWED_TRANSITIONS = {
-    "Reported": {"Pending", "In Progress", "Resolved"},
-    "Pending": {"In Progress", "Resolved"},
-    "In Progress": {"Resolved", "Pending"},
-    "Resolved": {"In Progress"},
+    "Reported": {"Assigned"},
+    "Assigned": {"In Progress"},
+    "In Progress": {"Resolved"},
+    "Resolved": set(),
 }
+
+AVG_SPEED_KMH = 40.0
+# Multi-purpose rescue units are registered under this category and are the
+# fallback pool when no category-specific team is available.
+FALLBACK_CATEGORY = Category.OTHER.value

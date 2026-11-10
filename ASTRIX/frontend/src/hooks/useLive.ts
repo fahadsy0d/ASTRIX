@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { WS_URL } from "../lib/api";
 
@@ -49,14 +49,20 @@ function playEscalationChime() {
 
 export function useLive() {
   const qc = useQueryClient();
+  const [connected, setConnected] = useState(false);
 
   useEffect(() => {
     let ws: WebSocket | null = null;
     let stop = false;
+    let ping: ReturnType<typeof setInterval> | undefined;
 
     const connect = () => {
       try {
         ws = new WebSocket(WS_URL);
+        ws.onopen = () => {
+          setConnected(true);
+          ping = setInterval(() => ws?.readyState === 1 && ws.send("ping"), 25000);
+        };
 
         ws.onmessage = (event) => {
           try {
@@ -75,10 +81,14 @@ export function useLive() {
             // non-JSON frame
           }
           qc.invalidateQueries({ queryKey: ["incidents"] });
+          qc.invalidateQueries({ queryKey: ["incident"] });
+          qc.invalidateQueries({ queryKey: ["teams"] });
           qc.invalidateQueries({ queryKey: ["stats"] });
         };
 
         ws.onclose = () => {
+          setConnected(false);
+          clearInterval(ping);
           if (!stop) setTimeout(connect, 2000);
         };
         ws.onerror = () => ws?.close();
@@ -90,7 +100,10 @@ export function useLive() {
     connect();
     return () => {
       stop = true;
+      clearInterval(ping);
       ws?.close();
     };
   }, [qc]);
+
+  return connected;
 }

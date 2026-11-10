@@ -17,7 +17,7 @@ def export_incidents_csv(db: Session = Depends(get_db)):
     buf = io.StringIO()
     w = csv.writer(buf)
     w.writerow([
-        "id", "title", "category", "severity", "severity_score",
+        "id", "title", "category", "severity", "priority_score", "severity_score",
         "severity_reason", "status", "location", "latitude", "longitude",
         "people_affected", "contact", "source", "created_at"
     ])
@@ -29,6 +29,7 @@ def export_incidents_csv(db: Session = Depends(get_db)):
             i.title,
             i.category,
             i.severity,
+            i.priority_score,
             i.severity_score,
             i.severity_reason,
             i.status,

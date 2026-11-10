@@ -1,54 +1,54 @@
-﻿from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from app.core.db import Base, engine, ensure_sqlite_schema
-from app.routers import incidents, stats
-from app.services.ws import hub
-from app.plugins import load_plugins
 
-# Ensure DB schema is ready at startup
+from app import models  # noqa: F401  (register tables)
+from app.core.db import Base, engine
+from app.plugins import load_plugins
+from app.routers import incidents, stats, teams
+from app.services.ws import hub
+
 Base.metadata.create_all(engine)
-ensure_sqlite_schema()
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup actions
     Base.metadata.create_all(engine)
-    ensure_sqlite_schema()
     yield
 
+
 app = FastAPI(
-    title="Emergency Response & Disaster Management Platform",
-    description="Centralized triage, explainable severity scoring, and live monitoring platform.",
-    version="1.0.0",
-    lifespan=lifespan
+    title="ASTRIX Emergency Command Center",
+    description="Priority scoring, nearest-unit dispatch, lifecycle tracking and live operational analytics.",
+    version="2.0.0",
+    lifespan=lifespan,
 )
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=["*"],  # demo setup; restrict to the frontend origin in production
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Core Routers
 app.include_router(incidents.router)
+app.include_router(teams.router)
 app.include_router(stats.router)
+load_plugins(app)  # Round 1 plugin system (CSV export etc.)
 
-# Auto-load Round 2 modular plugins
-load_plugins(app)
 
 @app.get("/health", tags=["system"])
-def health_check():
-    return {"status": "ok", "service": "ASTRIX Emergency Platform"}
+def health():
+    return {"status": "ok", "service": "ASTRIX Emergency Platform", "version": "2.0.0"}
+
 
 @app.websocket("/ws")
 async def live_feed(socket: WebSocket):
     await hub.connect(socket)
     try:
         while True:
-            # Keep socket alive and listen for optional ping/client events
-            await socket.receive_text()
+            await socket.receive_text()  # keep-alive pings from the client
     except WebSocketDisconnect:
         hub.disconnect(socket)

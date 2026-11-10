@@ -72,7 +72,7 @@ def run_simulation():
             res = requests.post(API_URL, json=payload, timeout=5)
             if res.status_code == 201:
                 data = res.json()
-                print(f"[{count:03d}] Ingested: #{data['id']} | {data['severity']} | {cat} @ {area} (Score: {data['severity_score']})")
+                print(f"[{count:03d}] Ingested: #{data['id']} | {data['severity']} | {cat} @ {area} (Priority: {data['priority_score']})")
             else:
                 print(f"[{count:03d}] Server response error {res.status_code}: {res.text}")
         except Exception as err:

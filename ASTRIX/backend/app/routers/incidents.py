@@ -1,30 +1,35 @@
 from fastapi import APIRouter, Depends, HTTPException, Response
-from sqlalchemy import select, case
+from sqlalchemy import select
 from sqlalchemy.orm import Session
-from app.core.db import get_db
-from app.models import Incident
-from app.schemas import IncidentCreate, IncidentOut, StatusUpdate, DispatchRequest
+
 from app.constants import Category, Severity, Status
+from app.core.db import get_db
+from app.models import EmergencyTeam, Incident
+from app.schemas import (AssignmentOut, AssignRequest, IncidentCreate, IncidentDetail, IncidentOut, StatusUpdate,
+                         TeamOut)
 from app.services import incidents as svc
+from app.services.seed import wipe
 from app.services.ws import hub
 
 router = APIRouter(prefix="/api/v1/incidents", tags=["incidents"])
 
-def _get_or_404(db: Session, incident_id: int) -> Incident:
+
+def _get(db: Session, incident_id: str) -> Incident:
     inc = db.get(Incident, incident_id)
     if not inc:
         raise HTTPException(404, "Incident not found")
     return inc
 
-@router.post("", response_model=IncidentOut, status_code=201)
-async def create_incident(data: IncidentCreate, db: Session = Depends(get_db)):
-    inc, is_duplicate = svc.create_incident(db, data)
-    out = IncidentOut.model_validate(inc)
-    # Broadcast different events so the frontend can distinguish
-    # a brand-new pin on the map vs. an escalation of an existing one
-    event = "incident.escalated" if is_duplicate else "incident.created"
-    await hub.broadcast(event, out.model_dump(mode="json"))
-    return out
+
+def _out(inc: Incident) -> dict:
+    return IncidentOut.model_validate(inc).model_dump(mode="json")
+
+
+async def _broadcast_with_team(event: str, inc: Incident):
+    await hub.broadcast(event, _out(inc))
+    if inc.assigned_team:
+        await hub.broadcast("team.updated", TeamOut.model_validate(inc.assigned_team).model_dump(mode="json"))
+
 
 @router.get("", response_model=list[IncidentOut])
 def list_incidents(
@@ -32,8 +37,9 @@ def list_incidents(
     category: Category | None = None,
     severity: Severity | None = None,
     search: str | None = None,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
+    """All incidents ordered by priority_score DESC (re-scored live so waiting time keeps counting)."""
     q = select(Incident)
     if status:
         q = q.where(Incident.status == status.value)
@@ -43,72 +49,80 @@ def list_incidents(
         q = q.where(Incident.severity == severity.value)
     if search:
         s = f"%{search.strip()}%"
-        q = q.where((Incident.title.ilike(s)) | (Incident.location.ilike(s)) | (Incident.description.ilike(s)))
+        q = q.where(Incident.title.ilike(s) | Incident.location.ilike(s) | Incident.description.ilike(s))
+    rows = db.scalars(q).unique().all()
+    for r in rows:
+        svc.refresh_priority(r)
+    db.commit()
+    rows.sort(key=lambda r: (-r.priority_score, r.created_at))
+    return rows
 
-    rank = case(
-        (Incident.severity == "Critical", 0),
-        (Incident.severity == "High", 1),
-        (Incident.severity == "Medium", 2),
-        (Incident.severity == "Low", 3),
-        else_=4
-    )
-    return db.scalars(q.order_by(rank, Incident.created_at.desc())).all()
 
-@router.get("/{incident_id}", response_model=IncidentOut)
-def get_incident(incident_id: int, db: Session = Depends(get_db)):
-    return _get_or_404(db, incident_id)
+@router.post("", response_model=IncidentOut, status_code=201)
+async def create_incident(data: IncidentCreate, db: Session = Depends(get_db)):
+    inc, dup = svc.create_incident(db, data)
+    await hub.broadcast("incident.escalated" if dup else "incident.created", _out(inc))
+    return inc
+
+
+@router.get("/{incident_id}", response_model=IncidentDetail)
+def get_incident(incident_id: str, db: Session = Depends(get_db)):
+    inc = _get(db, incident_id)
+    svc.refresh_priority(inc)
+    db.commit()
+    return inc
+
 
 @router.patch("/{incident_id}/status", response_model=IncidentOut)
-async def update_status(incident_id: int, body: StatusUpdate, db: Session = Depends(get_db)):
-    inc = _get_or_404(db, incident_id)
+async def update_status(incident_id: str, body: StatusUpdate, db: Session = Depends(get_db)):
+    inc = _get(db, incident_id)
     try:
-        svc.transition(db, inc, body.status.value)
-    except ValueError as e:
-        raise HTTPException(409, str(e))
-    out = IncidentOut.model_validate(inc)
-    await hub.broadcast("incident.updated", out.model_dump(mode="json"))
-    return out
+        svc.transition(db, inc, body.status.value, body.changed_by)
+    except svc.DispatchError as e:
+        raise HTTPException(e.code, str(e))
+    await _broadcast_with_team("incident.updated", inc)
+    return inc
 
-@router.post("/{incident_id}/dispatch", response_model=IncidentOut)
-async def dispatch_responder_unit(incident_id: int, body: DispatchRequest, db: Session = Depends(get_db)):
-    inc = _get_or_404(db, incident_id)
-    inc.assigned_to = body.unit.strip()
-    
-    # Automatically promote newly reported/pending incidents to In Progress on dispatch
-    if inc.status in ["Reported", "Pending"]:
-        try:
-            svc.transition(db, inc, "In Progress")
-        except ValueError:
-            pass
-    else:
-        db.commit()
-        db.refresh(inc)
 
-    out = IncidentOut.model_validate(inc)
-    await hub.broadcast("incident.updated", out.model_dump(mode="json"))
-    return out
+@router.post("/{incident_id}/auto-assign", response_model=AssignmentOut)
+async def auto_assign(incident_id: str, db: Session = Depends(get_db)):
+    """Nearest Available team of the incident's category (fallback: multi-purpose rescue) via Haversine."""
+    inc = _get(db, incident_id)
+    try:
+        svc.auto_assign(db, inc)
+    except svc.DispatchError as e:
+        raise HTTPException(e.code, str(e))
+    await _broadcast_with_team("incident.updated", inc)
+    return AssignmentOut(incident=inc, team=inc.assigned_team, distance_km=inc.distance_km, eta_minutes=inc.eta_minutes)
+
+
+@router.post("/{incident_id}/assign", response_model=AssignmentOut)
+async def manual_assign(incident_id: str, body: AssignRequest, db: Session = Depends(get_db)):
+    inc = _get(db, incident_id)
+    team = db.get(EmergencyTeam, body.team_id)
+    if not team:
+        raise HTTPException(404, "Team not found")
+    try:
+        svc.assign_team(db, inc, team, "Dispatcher")
+    except svc.DispatchError as e:
+        raise HTTPException(e.code, str(e))
+    await _broadcast_with_team("incident.updated", inc)
+    return AssignmentOut(incident=inc, team=inc.assigned_team, distance_km=inc.distance_km, eta_minutes=inc.eta_minutes)
+
 
 @router.delete("", status_code=204)
 async def clear_incidents(db: Session = Depends(get_db)):
-    db.query(Incident).delete()
+    wipe(db)
+    from sqlalchemy import update
+    db.execute(update(EmergencyTeam).where(EmergencyTeam.status == "Busy").values(status="Available"))
     db.commit()
     await hub.broadcast("incident.cleared", {"cleared": True})
     return Response(status_code=204)
 
+
 @router.delete("/{incident_id}", status_code=204)
-async def delete_incident(incident_id: int, db: Session = Depends(get_db)):
-    inc = _get_or_404(db, incident_id)
-    db.delete(inc)
-    db.commit()
+async def delete_incident(incident_id: str, db: Session = Depends(get_db)):
+    inc = _get(db, incident_id)
+    svc.delete_incident(db, inc)
     await hub.broadcast("incident.deleted", {"id": incident_id})
     return Response(status_code=204)
-
-@router.post("/seed", response_model=list[IncidentOut])
-async def seed_incidents(count: int = 5, db: Session = Depends(get_db)):
-    created = svc.seed_sample_incidents(db, count=min(count, 15))
-    results = []
-    for inc in created:
-        out = IncidentOut.model_validate(inc)
-        results.append(out)
-        await hub.broadcast("incident.created", out.model_dump(mode="json"))
-    return results
