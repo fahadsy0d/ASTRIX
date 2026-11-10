@@ -1,0 +1,30 @@
+{
+  "expo": {
+    "name": "ASTRIX Emergency SOS",
+    "slug": "astrix",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "backgroundColor": "#090d16",
+    "ios": {
+      "supportsTablet": true
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#090d16",
+        "foregroundImage": "./assets/android-icon-foreground.png"
+      },
+      "predictiveBackGestureEnabled": false
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "015d75da-5c85-465d-8428-36ae760f0cb6"
+      }
+    },
+    "owner": "fahabs"
+  }
+}
